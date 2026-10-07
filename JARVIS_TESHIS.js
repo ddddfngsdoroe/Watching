@@ -1,3 +1,14 @@
+// ==UserScript==
+// @name         WATCHING v51.4 (Third Person + Model + Smart Aim + Rage Bot)
+// @namespace    http://tampermonkey.net/
+// @version      51.4
+// @description  Modern Black GUI + ESP + Aimbot + Bhop + SpeedHack + Skin Giver + VM FOV + Third Person + Rage Bot
+// @match        *://clutcher.io/*
+// @match        *://*.clutcher.io/*
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
 (function() {
     'use strict';
 
@@ -26,10 +37,9 @@
             fov: 15, smooth: 5,
             targetBone: 'head', visibleOnly: false, teamCheck: false,
             drawFov: false, maxDist: 200,
-            // PROJECTILE MODE
-            projectileSnap: true,       // grenade/molotov atarken tam hedefe kilitlen
-            projectileBone: 'chest',    // mermi için hedef bone
-            projectileSmooth: 1         // mermi için smooth (1 = anında)
+            projectileSnap: true,
+            projectileBone: 'chest',
+            projectileSmooth: 1
         },
         visual: {
             noRecoil: false, noSpread: false, noSpreadAggressive: false,
@@ -67,8 +77,23 @@
                 thickness: 3.5, branches: 2
             }
         },
-        skin: { cachedData: null }
+        skin: { cachedData: null },
+        // RAGE MODE
+        rage: {
+            enabled: false,
+            autoFire: false,
+            fov: 360,
+            smooth: 1,
+            autoScope: false,
+            penetration: true
+        }
     };
+
+    // Rage modu açılırken önceki ayarları sakla
+    let rageBackup = null;
+
+    // Rage fire timer
+    let rageFireTimer = null;
 
     const SKEL = {
         colorEnemy: '#ff3030', colorTeam: '#30ff30',
@@ -666,10 +691,7 @@
         }
     }
 
-    // ============================================================
-    //              PROJECTILE DETECTION
-    // ============================================================
-    // Grenade / molotov / smoke / flash gibi projectile silahları tespit et
+    // ============ PROJECTILE DETECTION ============
     function isProjectileWeapon(game) {
         try {
             const w = game.weapons;
@@ -682,7 +704,6 @@
             const cls = (def?.class || def?.kind || '').toLowerCase();
             const name = (def?.name || '').toLowerCase();
 
-            // Yaygın projectile isimleri
             const projectileNames = [
                 'grenade', 'hegrenade', 'he_grenade', 'frag',
                 'molotov', 'incgrenade', 'incendiary',
@@ -698,11 +719,124 @@
                 if (cls.includes(c) || id.includes(c)) return true;
             }
 
-            // Slot kontrolü (grenade slot 4)
             if (def?.slot === 4 || def?.slot === 'grenade' || def?.slot === 'Grenade') return true;
 
             return false;
         } catch { return false; }
+    }
+
+    // ============ RAGE MODE ============
+    function enterRageMode() {
+        if (rageBackup) return; // zaten rage'deyiz
+
+        // Önceki ayarları kaydet
+        rageBackup = {
+            aim: { ...settings.aim },
+            visual: { ...settings.visual },
+            mv: { ...settings.player.movement },
+            crosshair: { ...settings.player.crosshair }
+        };
+
+        // RAGE AYARLARI
+        settings.aim.enabled = true;
+        settings.aim.alwaysOn = true;
+        settings.aim.fov = 360;
+        settings.aim.smooth = 1;
+        settings.aim.targetBone = 'head';
+        settings.aim.visibleOnly = false;
+        settings.aim.teamCheck = false;
+        settings.aim.maxDist = 500;
+        settings.aim.drawFov = false;
+        settings.aim.projectileSnap = true;
+        settings.aim.projectileBone = 'chest';
+
+        settings.visual.noRecoil = true;
+        settings.visual.noSpread = true;
+        settings.visual.noSpreadAggressive = true;
+
+        settings.player.movement.bhopEnabled = true;
+        settings.player.movement.strafeEnabled = true;
+        settings.player.movement.speedEnabled = true;
+        settings.player.movement.speedMultiplier = 2.0;
+
+        // ESP wallhack açık olsun
+        settings.esp.enabled = true;
+        settings.esp.showEnemy = true;
+        settings.esp.showName = true;
+        settings.esp.showHealth = true;
+        settings.esp.showDistance = true;
+        settings.esp.glow = true;
+
+        // Aggressive no spread'i kur
+        if (!aggressiveNoSpreadInstalled) installAggressiveNoSpread();
+
+        settings.rage.enabled = true;
+
+        // GUI'yi yenile
+        refreshAllControls();
+    }
+
+    function exitRageMode() {
+        if (!rageBackup) return;
+
+        // Önceki ayarlara dön
+        Object.assign(settings.aim, rageBackup.aim);
+        Object.assign(settings.visual, rageBackup.visual);
+        Object.assign(settings.player.movement, rageBackup.mv);
+        Object.assign(settings.player.crosshair, rageBackup.crosshair);
+
+        rageBackup = null;
+        settings.rage.enabled = false;
+
+        // Aggressive no spread'i kaldır
+        if (aggressiveNoSpreadInstalled) uninstallAggressiveNoSpread();
+
+        // Rage fire timer'ı durdur
+        if (rageFireTimer) { clearInterval(rageFireTimer); rageFireTimer = null; }
+
+        refreshAllControls();
+    }
+
+    function toggleRageMode() {
+        if (settings.rage.enabled) exitRageMode();
+        else enterRageMode();
+    }
+
+    // Rage fire loop — auto shoot
+    function startRageFire() {
+        if (rageFireTimer) return;
+        rageFireTimer = setInterval(() => {
+            if (!settings.rage.enabled || !settings.rage.autoFire) return;
+            const game = window.game;
+            if (!game || game.state !== 'playing') return;
+            const player = game.player;
+            if (!player || !player.alive) return;
+            // Ateş et
+            try {
+                if (typeof game.playerShoot === 'function') {
+                    const def = game.weapons?.def ? game.weapons.def() : null;
+                    if (def) game.playerShoot(def);
+                } else if (typeof game.attack === 'function') {
+                    game.attack();
+                }
+            } catch (e) {}
+        }, 30);
+    }
+
+    // GUI kontrollerini yeniden oku — settings değişince toggle'ları güncelle
+    function refreshAllControls() {
+        // Her toggle/slider getVal() ile çalıştığı için otomatik güncellenir,
+        // ama checkbox'ların görsel state'i için manuel güncelleme gerek
+        document.querySelectorAll('#pp-body input[type=checkbox]').forEach(cb => {
+            if (cb._ppGetVal) cb.checked = cb._ppGetVal();
+        });
+        document.querySelectorAll('#pp-body input[type=range]').forEach(sl => {
+            if (sl._ppGetVal) {
+                const v = sl._ppGetVal();
+                sl.value = v;
+                if (sl._ppValSpan) sl._ppValSpan.textContent = v;
+            }
+        });
     }
 
     // ============================================================
@@ -916,6 +1050,43 @@
             padding: 3px 6px; background: rgba(255,128,51,.1);
             border-radius: 4px; margin-top: 4px; display: block;
         }
+        #pp-rage-status {
+            font-size: 11px; color: #fff;
+            padding: 6px 10px; background: rgba(255,0,0,.15);
+            border: 1px solid #ff3333;
+            border-radius: 6px; margin-top: 8px; display: block;
+            font-weight: 700; text-align: center;
+        }
+
+        /* ============ RAGE BUTTON ============ */
+        .pp-rage-btn {
+            display: block; width: 100%;
+            padding: 14px 16px; margin: 10px 0;
+            background: linear-gradient(135deg, #ff0000, #cc0000);
+            color: #fff; border: 2px solid #ff3333;
+            border-radius: 10px; cursor: pointer;
+            font-weight: 900; font-size: 16px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            transition: all .2s ease;
+            box-shadow: 0 0 20px rgba(255,0,0,.5);
+            animation: pp-rage-pulse 1.8s ease-in-out infinite;
+        }
+        .pp-rage-btn:hover {
+            background: linear-gradient(135deg, #ff3333, #ff0000);
+            box-shadow: 0 0 32px rgba(255,0,0,.8);
+            transform: scale(1.02);
+        }
+        .pp-rage-btn.active {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            border-color: #22c55e;
+            box-shadow: 0 0 30px rgba(34,197,94,.7);
+            animation: none;
+        }
+        @keyframes pp-rage-pulse {
+            0%, 100% { box-shadow: 0 0 20px rgba(255,0,0,.5); }
+            50% { box-shadow: 0 0 35px rgba(255,0,0,.9); }
+        }
 
         /* ============ MINI ICON ============ */
         #pp-mini-icon {
@@ -968,7 +1139,7 @@
     gui.innerHTML = `
         <div id="pp-title">
             <span class="pp-logo"></span>
-            <span class="pp-title-text">WATCHING v51.3</span>
+            <span class="pp-title-text">WATCHING v51.4</span>
             <button class="pp-btn pp-min" title="Minimize (P)" type="button">➖</button>
             <button class="pp-btn pp-close" title="Close" type="button">✕</button>
         </div>
@@ -987,8 +1158,9 @@
     const bodyEl = gui.querySelector('#pp-body');
 
     const TABS = [
-        ['esp', 'ESP'],
+        ['rage', '🔥 RAGE'],
         ['aim', 'Aimbot'],
+        ['esp', 'ESP'],
         ['visual', 'Visuals'],
         ['player', 'Player'],
         ['effects', 'Effects'],
@@ -996,7 +1168,7 @@
         ['tools', 'Tools']
     ];
     const tabPanels = {};
-    let currentTab = 'esp';
+    let currentTab = 'rage';
 
     for (const [id, label] of TABS) {
         const btn = document.createElement('button');
@@ -1117,6 +1289,18 @@
 
     window.addEventListener('keydown', onKeyP, true);
 
+    // Rage hotkey: R tuşu
+    function onKeyR(e) {
+        if (e.code !== 'KeyR') return;
+        if (e.repeat) return;
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleRageMode();
+    }
+    window.addEventListener('keydown', onKeyR, true);
+
     new MutationObserver(() => {
         if (guiMode !== 'open') return;
         if (gui.style.display === 'none') gui.style.setProperty('display', 'flex', 'important');
@@ -1181,6 +1365,7 @@
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = getVal();
+        cb._ppGetVal = getVal;
         cb.onchange = () => setVal(cb.checked);
         return makeRow(label, cb);
     }
@@ -1195,9 +1380,11 @@
         slider.type = 'range';
         slider.min = min; slider.max = max; slider.step = step;
         slider.value = getVal();
+        slider._ppGetVal = getVal;
         const val = document.createElement('span');
         val.textContent = getVal();
         val.style.cssText = 'color:#8b5cf6;font-weight:700;min-width:36px;text-align:right;';
+        slider._ppValSpan = val;
         slider.oninput = () => { val.textContent = slider.value; setVal(parseFloat(slider.value)); };
         right.appendChild(slider);
         right.appendChild(val);
@@ -1316,6 +1503,144 @@
     }
 
     // ============================================================
+    //                        RAGE TAB
+    // ============================================================
+    const ragePanel = tabPanels.rage;
+
+    ragePanel.appendChild(makeHeader('🔥 RAGE MODE'));
+
+    const rageBtn = document.createElement('button');
+    rageBtn.className = 'pp-rage-btn';
+    rageBtn.textContent = '🔥 ACTIVATE RAGE MODE';
+    rageBtn.onclick = () => {
+        toggleRageMode();
+    };
+    ragePanel.appendChild(rageBtn);
+
+    const rageStatus = document.createElement('div');
+    rageStatus.id = 'pp-rage-status';
+    rageStatus.textContent = '⏸ RAGE MODE OFF — Press R or click button';
+    rageStatus.style.cssText = 'font-size:11px;color:#9a8fc0;padding:6px 10px;background:rgba(139,92,246,.1);border-radius:6px;margin-top:8px;text-align:center;font-weight:700;';
+    ragePanel.appendChild(rageStatus);
+
+    ragePanel.appendChild(makeHeader('RAGE SETTINGS'));
+    ragePanel.appendChild(makeToggle('Auto Fire (no click needed)', () => settings.rage.autoFire, v => {
+        settings.rage.autoFire = v;
+        if (v && settings.rage.enabled) startRageFire();
+        if (!v && rageFireTimer) { clearInterval(rageFireTimer); rageFireTimer = null; }
+    }));
+    ragePanel.appendChild(makeToggle('Auto Scope (sniper)', () => settings.rage.autoScope, v => settings.rage.autoScope = v));
+    ragePanel.appendChild(makeToggle('Penetration (through walls)', () => settings.rage.penetration, v => settings.rage.penetration = v));
+
+    ragePanel.appendChild(makeHeader('RAGE FOV'));
+    ragePanel.appendChild(makeSlider('Rage FOV', 30, 360, 5, () => settings.rage.fov, v => settings.rage.fov = v));
+    ragePanel.appendChild(makeSlider('Rage Smooth', 1, 5, 1, () => settings.rage.smooth, v => settings.rage.smooth = v));
+
+    ragePanel.appendChild(makeHeader('INFO'));
+    const infoDiv = document.createElement('div');
+    infoDiv.style.cssText = 'font-size:11px;color:#9a8fc0;padding:8px;background:rgba(0,0,0,.4);border-radius:6px;line-height:1.6;';
+    infoDiv.innerHTML = `
+        <b style="color:#ff3333;">⚠️ RAGE MODE NEDİR?</b><br>
+        Aimbotun en agresif halidir:<br>
+        • FOV 360° (her yeri görür)<br>
+        • Smooth 1 (anında kilitlenir)<br>
+        • Head bone (kafaya kilit)<br>
+        • Auto-fire (sen tıklamadan ateş)<br>
+        • No Recoil + No Spread<br>
+        • Speed Hack + Bhop<br>
+        • ESP + Glow açık<br><br>
+        <b style="color:#ff8033;">Hotkey:</b> R tuşu ile aç/kapa<br>
+        <b style="color:#ff6b6b;">⚠️ Çok hızlı ban yedirir!</b>
+    `;
+    ragePanel.appendChild(infoDiv);
+
+    // ============================================================
+    //                       AIMBOT TAB
+    // ============================================================
+    const aim = settings.aim;
+    const aimPanel = tabPanels.aim;
+
+    const aimMasterWrap = document.createElement('div');
+    aimMasterWrap.className = 'pp-row';
+    aimMasterWrap.style.cssText = 'background:rgba(255,80,80,.15);border:1px solid #ff5050;border-radius:8px;padding:10px;margin-bottom:10px;';
+    const aimMasterLbl = document.createElement('span');
+    aimMasterLbl.textContent = '🎯 AIMBOT MASTER';
+    aimMasterLbl.style.cssText = 'font-weight:800;color:#ff8080;letter-spacing:1px;';
+    const aimMasterCb = document.createElement('input');
+    aimMasterCb.type = 'checkbox';
+    aimMasterCb.checked = aim.enabled;
+    aimMasterCb._ppGetVal = () => aim.enabled;
+    aimMasterCb.onchange = () => aim.enabled = aimMasterCb.checked;
+    aimMasterWrap.appendChild(aimMasterLbl);
+    aimMasterWrap.appendChild(aimMasterCb);
+    aimPanel.appendChild(aimMasterWrap);
+
+    aimPanel.appendChild(makeHeader('⚡ ACTIVATION MODE'));
+    const alwaysOnRow = document.createElement('label');
+    alwaysOnRow.className = 'pp-row';
+    alwaysOnRow.style.cssText = 'background:rgba(255,150,0,.12);border:1px solid rgba(255,150,0,.4);border-radius:8px;padding:10px;margin:8px 0;cursor:pointer;';
+    const alwaysOnLbl = document.createElement('span');
+    alwaysOnLbl.textContent = '⚡ ALWAYS ON (no key needed)';
+    alwaysOnLbl.style.cssText = 'font-weight:700;color:#ffb340;';
+    const alwaysOnCb = document.createElement('input');
+    alwaysOnCb.type = 'checkbox';
+    alwaysOnCb.checked = aim.alwaysOn;
+    alwaysOnCb._ppGetVal = () => aim.alwaysOn;
+    alwaysOnCb.style.cssText = 'accent-color:#ffb340;';
+    alwaysOnCb.onchange = () => aim.alwaysOn = alwaysOnCb.checked;
+    alwaysOnRow.appendChild(alwaysOnLbl);
+    alwaysOnRow.appendChild(alwaysOnCb);
+    aimPanel.appendChild(alwaysOnRow);
+
+    aimPanel.appendChild(makeHeader('OR KEYBIND'));
+    aimPanel.appendChild(makeKeybind('Custom Key (hold)', () => aim.key || '', v => aim.key = v || null));
+
+    aimPanel.appendChild(makeHeader('AIM SETTINGS'));
+    aimPanel.appendChild(makeSlider('FOV (degrees)', 1, 360, 1, () => aim.fov, v => { aim.fov = v; }));
+    aimPanel.appendChild(makeSlider('Smooth', 1, 30, 1, () => aim.smooth, v => { aim.smooth = v; }));
+    aimPanel.appendChild(makeSlider('Max Distance', 10, 500, 5, () => aim.maxDist, v => { aim.maxDist = v; }));
+    aimPanel.appendChild(makeDropdown('Target Bone', [
+        { value: 'head', label: 'Head' },
+        { value: 'neck', label: 'Neck' },
+        { value: 'chest', label: 'Chest' },
+        { value: 'stomach', label: 'Stomach' }
+    ], () => aim.targetBone, v => { aim.targetBone = v; }));
+    aimPanel.appendChild(makeHeader('FILTERS'));
+    aimPanel.appendChild(makeToggle('Team Check', () => aim.teamCheck, v => aim.teamCheck = v));
+    aimPanel.appendChild(makeToggle('Visible Only', () => aim.visibleOnly, v => aim.visibleOnly = v));
+    aimPanel.appendChild(makeToggle('Draw FOV Circle', () => aim.drawFov, v => aim.drawFov = v));
+
+    aimPanel.appendChild(makeHeader('💣 PROJECTILE AIM (Grenade / Molotov)'));
+    const projRow = document.createElement('label');
+    projRow.className = 'pp-row';
+    projRow.style.cssText = 'background:rgba(255,128,51,.12);border:1px solid rgba(255,128,51,.5);border-radius:8px;padding:10px;margin:8px 0;cursor:pointer;';
+    const projLbl = document.createElement('span');
+    projLbl.textContent = '💣 Snap to Target (Grenade/Molotov)';
+    projLbl.style.cssText = 'font-weight:700;color:#ff8033;';
+    const projCb = document.createElement('input');
+    projCb.type = 'checkbox';
+    projCb.checked = aim.projectileSnap;
+    projCb._ppGetVal = () => aim.projectileSnap;
+    projCb.style.cssText = 'accent-color:#ff8033;';
+    projCb.onchange = () => aim.projectileSnap = projCb.checked;
+    projRow.appendChild(projLbl);
+    projRow.appendChild(projCb);
+    aimPanel.appendChild(projRow);
+
+    const projStatus = document.createElement('div');
+    projStatus.id = 'pp-proj-status';
+    projStatus.textContent = 'ℹ️ Grenade/molotov atarken tam hedefe kilitlenir';
+    aimPanel.appendChild(projStatus);
+
+    aimPanel.appendChild(makeDropdown('Projectile Target Bone', [
+        { value: 'head', label: 'Head (üst)' },
+        { value: 'neck', label: 'Neck' },
+        { value: 'chest', label: 'Chest (orta)' },
+        { value: 'stomach', label: 'Stomach (alt)' },
+        { value: 'feet', label: 'Feet (yer)' }
+    ], () => aim.projectileBone, v => { aim.projectileBone = v; }));
+
+    // ============================================================
     //                        ESP TAB
     // ============================================================
     const esp = settings.esp;
@@ -1330,6 +1655,7 @@
     const espMasterCb = document.createElement('input');
     espMasterCb.type = 'checkbox';
     espMasterCb.checked = esp.enabled;
+    espMasterCb._ppGetVal = () => esp.enabled;
     espMasterCb.onchange = () => esp.enabled = espMasterCb.checked;
     espMasterWrap.appendChild(espMasterLbl);
     espMasterWrap.appendChild(espMasterCb);
@@ -1356,90 +1682,6 @@
     }));
 
     // ============================================================
-    //                       AIMBOT TAB
-    // ============================================================
-    const aim = settings.aim;
-    const aimPanel = tabPanels.aim;
-
-    const aimMasterWrap = document.createElement('div');
-    aimMasterWrap.className = 'pp-row';
-    aimMasterWrap.style.cssText = 'background:rgba(255,80,80,.15);border:1px solid #ff5050;border-radius:8px;padding:10px;margin-bottom:10px;';
-    const aimMasterLbl = document.createElement('span');
-    aimMasterLbl.textContent = '🎯 AIMBOT MASTER';
-    aimMasterLbl.style.cssText = 'font-weight:800;color:#ff8080;letter-spacing:1px;';
-    const aimMasterCb = document.createElement('input');
-    aimMasterCb.type = 'checkbox';
-    aimMasterCb.checked = aim.enabled;
-    aimMasterCb.onchange = () => aim.enabled = aimMasterCb.checked;
-    aimMasterWrap.appendChild(aimMasterLbl);
-    aimMasterWrap.appendChild(aimMasterCb);
-    aimPanel.appendChild(aimMasterWrap);
-
-    aimPanel.appendChild(makeHeader('⚡ ACTIVATION MODE'));
-    const alwaysOnRow = document.createElement('label');
-    alwaysOnRow.className = 'pp-row';
-    alwaysOnRow.style.cssText = 'background:rgba(255,150,0,.12);border:1px solid rgba(255,150,0,.4);border-radius:8px;padding:10px;margin:8px 0;cursor:pointer;';
-    const alwaysOnLbl = document.createElement('span');
-    alwaysOnLbl.textContent = '⚡ ALWAYS ON (no key needed)';
-    alwaysOnLbl.style.cssText = 'font-weight:700;color:#ffb340;';
-    const alwaysOnCb = document.createElement('input');
-    alwaysOnCb.type = 'checkbox';
-    alwaysOnCb.checked = aim.alwaysOn;
-    alwaysOnCb.style.cssText = 'accent-color:#ffb340;';
-    alwaysOnCb.onchange = () => aim.alwaysOn = alwaysOnCb.checked;
-    alwaysOnRow.appendChild(alwaysOnLbl);
-    alwaysOnRow.appendChild(alwaysOnCb);
-    aimPanel.appendChild(alwaysOnRow);
-
-    aimPanel.appendChild(makeHeader('OR KEYBIND'));
-    aimPanel.appendChild(makeKeybind('Custom Key (hold)', () => aim.key || '', v => aim.key = v || null));
-
-    aimPanel.appendChild(makeHeader('AIM SETTINGS'));
-    aimPanel.appendChild(makeSlider('FOV (degrees)', 1, 90, 1, () => aim.fov, v => { aim.fov = v; }));
-    aimPanel.appendChild(makeSlider('Smooth', 1, 30, 1, () => aim.smooth, v => { aim.smooth = v; }));
-    aimPanel.appendChild(makeSlider('Max Distance', 10, 500, 5, () => aim.maxDist, v => { aim.maxDist = v; }));
-    aimPanel.appendChild(makeDropdown('Target Bone', [
-        { value: 'head', label: 'Head' },
-        { value: 'neck', label: 'Neck' },
-        { value: 'chest', label: 'Chest' },
-        { value: 'stomach', label: 'Stomach' }
-    ], () => aim.targetBone, v => { aim.targetBone = v; }));
-    aimPanel.appendChild(makeHeader('FILTERS'));
-    aimPanel.appendChild(makeToggle('Team Check', () => aim.teamCheck, v => aim.teamCheck = v));
-    aimPanel.appendChild(makeToggle('Visible Only', () => aim.visibleOnly, v => aim.visibleOnly = v));
-    aimPanel.appendChild(makeToggle('Draw FOV Circle', () => aim.drawFov, v => aim.drawFov = v));
-
-    // ---- PROJECTILE AIM ----
-    aimPanel.appendChild(makeHeader('💣 PROJECTILE AIM (Grenade / Molotov)'));
-    const projRow = document.createElement('label');
-    projRow.className = 'pp-row';
-    projRow.style.cssText = 'background:rgba(255,128,51,.12);border:1px solid rgba(255,128,51,.5);border-radius:8px;padding:10px;margin:8px 0;cursor:pointer;';
-    const projLbl = document.createElement('span');
-    projLbl.textContent = '💣 Snap to Target (Grenade/Molotov)';
-    projLbl.style.cssText = 'font-weight:700;color:#ff8033;';
-    const projCb = document.createElement('input');
-    projCb.type = 'checkbox';
-    projCb.checked = aim.projectileSnap;
-    projCb.style.cssText = 'accent-color:#ff8033;';
-    projCb.onchange = () => aim.projectileSnap = projCb.checked;
-    projRow.appendChild(projLbl);
-    projRow.appendChild(projCb);
-    aimPanel.appendChild(projRow);
-
-    const projStatus = document.createElement('div');
-    projStatus.id = 'pp-proj-status';
-    projStatus.textContent = 'ℹ️ Grenade/molotov atarken tam hedefe kilitlenir';
-    aimPanel.appendChild(projStatus);
-
-    aimPanel.appendChild(makeDropdown('Projectile Target Bone', [
-        { value: 'head', label: 'Head (üst)' },
-        { value: 'neck', label: 'Neck' },
-        { value: 'chest', label: 'Chest (orta)' },
-        { value: 'stomach', label: 'Stomach (alt)' },
-        { value: 'feet', label: 'Feet (yer)' }
-    ], () => aim.projectileBone, v => { aim.projectileBone = v; }));
-
-    // ============================================================
     //                       VISUALS TAB
     // ============================================================
     const visual = settings.visual;
@@ -1463,6 +1705,7 @@
     const tpCb = document.createElement('input');
     tpCb.type = 'checkbox';
     tpCb.checked = visual.thirdPerson;
+    tpCb._ppGetVal = () => visual.thirdPerson;
     tpCb.style.cssText = 'accent-color:#22c55e;';
     tpCb.onchange = () => {
         visual.thirdPerson = tpCb.checked;
@@ -1502,6 +1745,7 @@
     const vmFovCb = document.createElement('input');
     vmFovCb.type = 'checkbox';
     vmFovCb.checked = visual.vmFovEnabled;
+    vmFovCb._ppGetVal = () => visual.vmFovEnabled;
     vmFovCb.style.cssText = 'accent-color:#22d3ee;';
     vmFovCb.onchange = () => {
         visual.vmFovEnabled = vmFovCb.checked;
@@ -2139,6 +2383,8 @@
     }
 
     function getAimKeyPressed() {
+        // Rage modu aktifse her zaman aktif
+        if (settings.rage.enabled) return true;
         if (aim.alwaysOn) return true;
         const input = window.game && window.game.input;
         if (!input) return false;
@@ -2175,7 +2421,7 @@
     }
 
     // ============================================================
-    //   SMART AIMBOT  —  projectile algılama ile
+    //   SMART AIMBOT  —  rage aware
     // ============================================================
     function runAimbot() {
         if (!aim.enabled) return;
@@ -2185,19 +2431,30 @@
         if (!player || !player.alive) return;
         if (!getAimKeyPressed()) return;
 
-        // Projectile silah mı?
         const isProjectile = isProjectileWeapon(game);
+        const isRage = settings.rage.enabled;
 
-        // Hangi bone kullanılacak?
-        let useBone = aim.targetBone;
-        let useSmooth = aim.smooth;
-        let useVisibleOnly = aim.visibleOnly;
+        // Rage modu ayarları override eder
+        let useBone, useSmooth, useVisibleOnly, useFov, useMaxDist;
 
-        if (isProjectile && aim.projectileSnap) {
-            // Grenade/molotov: tam hedefe kilitlen, smooth=1 (anında)
+        if (isRage) {
+            useBone = 'head';
+            useSmooth = settings.rage.smooth;
+            useVisibleOnly = false;
+            useFov = settings.rage.fov;
+            useMaxDist = 500;
+        } else if (isProjectile && aim.projectileSnap) {
             useBone = aim.projectileBone;
             useSmooth = 1;
             useVisibleOnly = false;
+            useFov = aim.fov;
+            useMaxDist = aim.maxDist;
+        } else {
+            useBone = aim.targetBone;
+            useSmooth = aim.smooth;
+            useVisibleOnly = aim.visibleOnly;
+            useFov = aim.fov;
+            useMaxDist = aim.maxDist;
         }
 
         const bots = game.botMgr ? game.botMgr.bots : [];
@@ -2206,12 +2463,12 @@
         const fwdX = -Math.sin(player.yaw) * cosP;
         const fwdY = Math.sin(player.pitch);
         const fwdZ = -Math.cos(player.yaw) * cosP;
-        const cosFov = Math.cos(aim.fov * Math.PI / 180);
+        const cosFov = Math.cos(Math.min(useFov, 360) * Math.PI / 180);
         let best = null, bestScore = -Infinity;
 
         for (const bot of bots) {
             if (!bot.alive) continue;
-            if (aim.teamCheck && bot.team === player.team) continue;
+            if (aim.teamCheck && !isRage && bot.team === player.team) continue;
 
             const bp = getBoneWorld(bot, useBone);
             let tx, ty, tz;
@@ -2228,7 +2485,7 @@
 
             const dx = tx - px, dy = ty - py, dz = tz - pz;
             const dist = Math.hypot(dx, dy, dz);
-            if (dist < 0.1 || dist > aim.maxDist) continue;
+            if (dist < 0.1 || dist > useMaxDist) continue;
 
             const nx = dx / dist, ny = dy / dist, nz = dz / dist;
             const dot = nx * fwdX + ny * fwdY + nz * fwdZ;
@@ -2241,7 +2498,8 @@
                 }
             }
 
-            const score = dot - dist * 0.002;
+            // Rage modunda en yakın hedefi seç (mesafeye göre)
+            const score = isRage ? -dist : (dot - dist * 0.002);
             if (score > bestScore) { bestScore = score; best = { x: tx, y: ty, z: tz }; }
         }
 
@@ -2273,7 +2531,7 @@
         if (!cam || !player || !bots.length) return;
         const cw = canvas.width, chh = canvas.height;
         const cx = cw / 2, cy = chh / 2;
-        if (aim.enabled && aim.drawFov) {
+        if (aim.enabled && aim.drawFov && !settings.rage.enabled) {
             const fovRad = aim.fov * Math.PI / 180;
             const camFovRad = (cam.fov || 74) * Math.PI / 180;
             const radiusPx = Math.tan(fovRad) / Math.tan(camFovRad / 2) * cy;
@@ -2291,7 +2549,8 @@
             const h = bot.height || 1.8;
             const headS = w2s({ x: bot.x, y: bot.y + h * 0.95, z: bot.z }, cam);
             const feetS = w2s({ x: bot.x, y: bot.y, z: bot.z }, cam);
-            const color = isEnemy ? '#ff3030' : '#30ff30';
+            let color = isEnemy ? '#ff3030' : '#30ff30';
+            if (settings.rage.enabled && isEnemy) color = '#ff00ff';
             if ((!headS || !feetS) && esp.offscreen) {
                 const dx = bot.x - player.x, dz = bot.z - player.z;
                 const dist = Math.hypot(dx, dz);
@@ -2448,6 +2707,35 @@
         }
     }
 
+    // Rage status güncelle
+    let rageStatusTick = 0;
+    function updateRageStatus() {
+        rageStatusTick++;
+        if (rageStatusTick % 15 !== 0) return;
+        const statusEl = document.getElementById('pp-rage-status');
+        const btnEl = document.querySelector('.pp-rage-btn');
+        if (!statusEl) return;
+        if (settings.rage.enabled) {
+            statusEl.textContent = '🔥 RAGE MODE ON — Press R to disable';
+            statusEl.style.background = 'rgba(255,0,0,.2)';
+            statusEl.style.color = '#ff3333';
+            statusEl.style.border = '1px solid #ff3333';
+            if (btnEl) {
+                btnEl.classList.add('active');
+                btnEl.textContent = '✅ RAGE MODE ACTIVE';
+            }
+        } else {
+            statusEl.textContent = '⏸ RAGE MODE OFF — Press R or click button';
+            statusEl.style.background = 'rgba(139,92,246,.1)';
+            statusEl.style.color = '#9a8fc0';
+            statusEl.style.border = 'none';
+            if (btnEl) {
+                btnEl.classList.remove('active');
+                btnEl.textContent = '🔥 ACTIVATE RAGE MODE';
+            }
+        }
+    }
+
     // ============ MAIN LOOP ============
     let lastGlow = false;
     let initAttempts = 0;
@@ -2466,11 +2754,12 @@
         updateVmFovStatus();
         updateTpStatus();
         updateProjStatus();
+        updateRageStatus();
 
         if (!game || game.state !== 'playing') {
             if (lastGlow) { restoreGlow(); lastGlow = false; }
             killLightnings.length = 0;
-            if (aggressiveNoSpreadInstalled) uninstallAggressiveNoSpread();
+            if (aggressiveNoSpreadInstalled && !settings.rage.enabled) uninstallAggressiveNoSpread();
             restoreViewModelVisibility();
             return;
         }
@@ -2498,7 +2787,7 @@
         runMovement();
 
         if (visual.noSpreadAggressive && !aggressiveNoSpreadInstalled) installAggressiveNoSpread();
-        else if (!visual.noSpreadAggressive && aggressiveNoSpreadInstalled) uninstallAggressiveNoSpread();
+        else if (!visual.noSpreadAggressive && aggressiveNoSpreadInstalled && !settings.rage.enabled) uninstallAggressiveNoSpread();
 
         if (game.camera) updateAndDrawLightning(ctx, game.camera);
         drawESP(ctx, game);
@@ -2523,5 +2812,5 @@
 
     setModeOpen();
 
-    console.log('[WATCHING v51.3] Wallbang kaldırıldı, Projectile Aim eklendi!');
+    console.log('[WATCHING v51.4] 🔥 RAGE MODE eklendi! (R tuşu)');
 })();
