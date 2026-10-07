@@ -1,14 +1,3 @@
-// ==UserScript==
-// @name         WATCHING v51.3 (Third Person + Model + Smart Aim)
-// @namespace    http://tampermonkey.net/
-// @version      51.3
-// @description  Modern Black GUI + ESP + Aimbot + Bhop + SpeedHack + Skin Giver + VM FOV + Third Person
-// @match        *://clutcher.io/*
-// @match        *://*.clutcher.io/*
-// @grant        none
-// @run-at       document-end
-// ==/UserScript==
-
 (function() {
     'use strict';
 
